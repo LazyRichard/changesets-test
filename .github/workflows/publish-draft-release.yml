@@ -1,0 +1,123 @@
+name: publish draft release
+
+on:
+  pull_request:
+    types:
+      - closed
+
+permissions: {}
+
+jobs:
+  publish-draft-release:
+    if: >
+      github.event.pull_request.merged == true
+        && startsWith(github.event.pull_request.head.ref, 'release-pr/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Check out merged release commit
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+
+      - name: Resolve release metadata
+        id: release
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git fetch --tags --force
+
+          version="$(tr -d '[:space:]' < VERSION)"
+          if [[ -z "${version}" ]]; then
+            echo "VERSION is empty."
+            exit 1
+          fi
+
+          tag="v${version}"
+
+          if git rev-parse "${tag}" >/dev/null 2>&1; then
+            tag_exists=true
+          else
+            tag_exists=false
+          fi
+
+          if gh release view "${tag}" >/dev/null 2>&1; then
+            release_exists=true
+          else
+            release_exists=false
+          fi
+
+          {
+            echo "version=${version}"
+            echo "tag=${tag}"
+            echo "tag_exists=${tag_exists}"
+            echo "release_exists=${release_exists}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Extract release notes
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          python3 - <<'PY'
+          import os
+          import pathlib
+          import re
+
+          version = os.environ["RELEASE_VERSION"]
+          changelog = pathlib.Path("CHANGELOG.md").read_text(encoding="utf-8")
+          pattern = re.compile(rf'^## {re.escape(version)} \([^\n]+\)\n(?P<body>.*?)(?=^## |\Z)', re.MULTILINE | re.DOTALL)
+          match = pattern.search(changelog)
+
+          if match:
+            notes = f"## {version}\n" + match.group("body").strip() + "\n"
+          else:
+            notes = (
+              f"## {version}\n\n"
+              "Release notes section was not found in `CHANGELOG.md`.\n"
+            )
+
+          pathlib.Path("release-notes.md").write_text(notes, encoding="utf-8")
+          PY
+
+      - name: Create git tag
+        if: ${{ steps.release.outputs.tag_exists != 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          tag="${{ steps.release.outputs.tag }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "${tag}" -m "Release ${tag}"
+          git push origin "${tag}"
+
+      - name: Create draft GitHub Release
+        if: ${{ steps.release.outputs.release_exists != 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          tag="${{ steps.release.outputs.tag }}"
+          gh release create "${tag}" \
+            --draft \
+            --title "${tag}" \
+            --notes-file release-notes.md
+
+      - name: Summarize release result
+        shell: bash
+        run: |
+          {
+            echo "## Draft Release"
+            echo "- Version: ${{ steps.release.outputs.version }}"
+            echo "- Tag: ${{ steps.release.outputs.tag }}"
+            echo "- Tag already existed: ${{ steps.release.outputs.tag_exists }}"
+            echo "- Release already existed: ${{ steps.release.outputs.release_exists }}"
+          } >> "${GITHUB_STEP_SUMMARY}"
