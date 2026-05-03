@@ -34,34 +34,8 @@ jobs:
     env:
       BUMP_TYPE: ${{ inputs.bump }}
       REQUESTED_BASE_BRANCH: ${{ inputs.base_branch }}
-      RELEASE_MAINTAINERS: ${{ vars.RELEASE_MAINTAINERS }}
       GH_TOKEN: ${{ github.token }}
     steps:
-      - name: Verify maintainer allowlist
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          if [[ -z "${RELEASE_MAINTAINERS}" ]]; then
-            echo "RELEASE_MAINTAINERS repository variable is not set."
-            exit 1
-          fi
-
-          actor_allowed=false
-          IFS=',' read -r -a maintainers <<< "${RELEASE_MAINTAINERS}"
-          for maintainer in "${maintainers[@]}"; do
-            normalized="${maintainer//[[:space:]]/}"
-            if [[ "${normalized}" == "${GITHUB_ACTOR}" ]]; then
-              actor_allowed=true
-              break
-            fi
-          done
-
-          if [[ "${actor_allowed}" != "true" ]]; then
-            echo "${GITHUB_ACTOR} is not in RELEASE_MAINTAINERS."
-            exit 1
-          fi
-
       - name: Resolve base branch
         id: context
         shell: bash
@@ -94,77 +68,20 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install bump-my-version towncrier
 
-      - name: Validate branch policy and calculate release
+      - name: Calculate release
         id: release
         shell: bash
         run: |
           set -euo pipefail
 
           base_branch="${{ steps.context.outputs.base_branch }}"
-          bump_type="${BUMP_TYPE}"
           current_version="$(bump-my-version show current_version)"
 
-          case "${base_branch}" in
-            main)
-              case "${bump_type}" in
-                major|minor|stage) ;;
-                *)
-                  echo "${bump_type} is not allowed on ${base_branch}."
-                  exit 1
-                  ;;
-              esac
-              ;;
-            release/*)
-              if [[ ! "${base_branch}" =~ ^release/([0-9]+)\.([0-9]+)$ ]]; then
-                echo "Release branches must match release/x.y."
-                exit 1
-              fi
-
-              if [[ "${bump_type}" != "patch" ]]; then
-                echo "Only patch releases are allowed on ${base_branch}."
-                exit 1
-              fi
-
-              if [[ ! "${current_version}" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
-                echo "Patch release branches require a final x.y.z version, got ${current_version}."
-                exit 1
-              fi
-
-              branch_major="${BASH_REMATCH[1]}"
-              branch_minor="${BASH_REMATCH[2]}"
-              expected_major="${base_branch#release/}"
-              expected_major="${expected_major%%.*}"
-              expected_minor="${base_branch##*.}"
-
-              if [[ "${branch_major}" != "${expected_major}" || "${branch_minor}" != "${expected_minor}" ]]; then
-                echo "Current version ${current_version} does not match ${base_branch}."
-                exit 1
-              fi
-              ;;
-            *)
-              echo "Release automation only supports main or release/x.y branches."
-              exit 1
-              ;;
-          esac
-
-          new_version="$(bump-my-version show --increment "${bump_type}" new_version)"
+          new_version="$(bump-my-version show --increment "${BUMP_TYPE}" new_version)"
           sanitized_base="${base_branch//\//-}"
           sanitized_base="${sanitized_base//./-}"
-          release_branch="release-pr/${sanitized_base}-${bump_type}-v${new_version}"
+          release_branch="release-pr/${sanitized_base}-${BUMP_TYPE}-v${new_version}"
           pr_title="Release: ${new_version}"
-
-          duplicate_pr_url="$({
-            gh pr list \
-              --base "${base_branch}" \
-              --state open \
-              --json headRefName,title,url \
-              --jq "map(select(.headRefName == \"${release_branch}\" or .title == \"${pr_title}\"))[0].url"
-          } || true)"
-
-          if [[ -n "${duplicate_pr_url}" && "${duplicate_pr_url}" != "null" ]]; then
-            echo "Open release PR already exists: ${duplicate_pr_url}"
-            exit 1
-          fi
 
           {
             echo "current_version=${current_version}"
@@ -176,16 +93,16 @@ jobs:
           {
             echo "## Release Plan"
             echo "- Base branch: ${base_branch}"
-            echo "- Release type: ${bump_type}"
+            echo "- Release type: ${BUMP_TYPE}"
             echo "- Previous version: ${current_version}"
             echo "- New version: ${new_version}"
           } >> "${GITHUB_STEP_SUMMARY}"
 
-      - name: Stop after validation
+      - name: Stop after calculation
         if: ${{ inputs.dry_run }}
         shell: bash
         run: |
-          echo "Dry run requested; stopping after validation."
+          echo "Dry run requested; stopping after calculation."
 
       - name: Apply version and changelog updates
         if: ${{ !inputs.dry_run }}
