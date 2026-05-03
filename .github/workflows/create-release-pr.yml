@@ -143,11 +143,11 @@ jobs:
           cat <<EOF > release-pr-body.md
           ## Summary
 
-          - Base branch: `${base_branch}`
-          - Release type: `${BUMP_TYPE}`
-          - Previous version: `${current_version}`
-          - New version: `${new_version}`
-          - Changelog updated with `towncrier`
+          - Base branch: \`${base_branch}\`
+          - Release type: \`${BUMP_TYPE}\`
+          - Previous version: \`${current_version}\`
+          - New version: \`${new_version}\`
+          - Changelog updated with \`towncrier\`
           EOF
 
           gh pr create \
