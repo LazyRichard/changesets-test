@@ -3,15 +3,26 @@ name: create release pr
 on:
   workflow_dispatch:
     inputs:
-      bump:
-        description: Release increment to prepare
+      version_bump:
+        description: Numeric version line to prepare
         required: true
         type: choice
+        default: minor
         options:
+          - none
           - major
           - minor
-          - stage
           - patch
+      release_stage:
+        description: Release stage for the target version
+        required: true
+        type: choice
+        default: final
+        options:
+          - final
+          - alpha
+          - beta
+          - rc
       dry_run:
         description: Validate and calculate only
         required: false
@@ -27,7 +38,8 @@ jobs:
       contents: write
       pull-requests: write
     env:
-      BUMP_TYPE: ${{ inputs.bump }}
+      VERSION_BUMP: ${{ inputs.version_bump }}
+      RELEASE_STAGE: ${{ inputs.release_stage }}
       GH_TOKEN: ${{ github.token }}
     steps:
       - name: Validate workflow inputs
@@ -36,8 +48,8 @@ jobs:
         run: |
           set -euo pipefail
 
-          if [[ -z "${BUMP_TYPE}" ]]; then
-            echo "BUMP_TYPE is required."
+          if [[ -z "${VERSION_BUMP}" || -z "${RELEASE_STAGE}" ]]; then
+            echo "VERSION_BUMP and RELEASE_STAGE are required."
             exit 1
           fi
 
@@ -72,12 +84,98 @@ jobs:
           set -euo pipefail
 
           base_branch="${GITHUB_REF_NAME}"
-          current_version="$(bump-my-version show current_version)"
+          current_version="$(tr -d '[:space:]' < VERSION)"
+          release_mode="${VERSION_BUMP}/${RELEASE_STAGE}"
 
-          new_version="$(bump-my-version show --increment "${BUMP_TYPE}" new_version)"
+          if [[ ! "${current_version}" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)(-(alpha|beta|rc)\.([0-9]+))?$ ]]; then
+            echo "Current version '${current_version}' does not match the configured release format."
+            exit 1
+          fi
+
+          major="${BASH_REMATCH[1]}"
+          minor="${BASH_REMATCH[2]}"
+          patch="${BASH_REMATCH[3]}"
+          current_stage="${BASH_REMATCH[5]:-final}"
+          current_stage_num="${BASH_REMATCH[6]:-}"
+
+          if [[ "${base_branch}" == "main" ]]; then
+            if [[ "${VERSION_BUMP}" == "patch" ]]; then
+              echo "Patch releases must be prepared from a release/x.y branch."
+              exit 1
+            fi
+          else
+            expected_line="${base_branch#release/}"
+            current_line="${major}.${minor}"
+
+            if [[ "${current_line}" != "${expected_line}" ]]; then
+              echo "Current version ${current_version} does not match branch ${base_branch}."
+              exit 1
+            fi
+
+            if [[ "${VERSION_BUMP}" != "patch" || "${RELEASE_STAGE}" != "final" ]]; then
+              echo "release/x.y branches only support version_bump=patch with release_stage=final."
+              exit 1
+            fi
+
+            if [[ "${current_stage}" != "final" ]]; then
+              echo "release/x.y branches do not support prerelease versions."
+              exit 1
+            fi
+          fi
+
+          case "${VERSION_BUMP}" in
+            major)
+              next_major=$((major + 1))
+              next_minor=0
+              next_patch=0
+              ;;
+            minor)
+              next_major=${major}
+              next_minor=$((minor + 1))
+              next_patch=0
+              ;;
+            patch)
+              next_major=${major}
+              next_minor=${minor}
+              next_patch=$((patch + 1))
+              ;;
+            none)
+              next_major=${major}
+              next_minor=${minor}
+              next_patch=${patch}
+              ;;
+            *)
+              echo "Unsupported version_bump '${VERSION_BUMP}'."
+              exit 1
+              ;;
+          esac
+
+          if [[ "${VERSION_BUMP}" == "none" ]]; then
+            if [[ "${current_stage}" == "final" ]]; then
+              echo "version_bump=none requires the current version to already be a prerelease."
+              exit 1
+            fi
+
+            if [[ "${RELEASE_STAGE}" == "final" ]]; then
+              new_version="${next_major}.${next_minor}.${next_patch}"
+            elif [[ "${RELEASE_STAGE}" == "${current_stage}" ]]; then
+              next_stage_num=$((current_stage_num + 1))
+              new_version="${next_major}.${next_minor}.${next_patch}-${RELEASE_STAGE}.${next_stage_num}"
+            else
+              new_version="${next_major}.${next_minor}.${next_patch}-${RELEASE_STAGE}.1"
+            fi
+          else
+            if [[ "${RELEASE_STAGE}" == "final" ]]; then
+              new_version="${next_major}.${next_minor}.${next_patch}"
+            else
+              new_version="${next_major}.${next_minor}.${next_patch}-${RELEASE_STAGE}.1"
+            fi
+          fi
+
           sanitized_base="${base_branch//\//-}"
           sanitized_base="${sanitized_base//./-}"
-          release_branch="release-pr/${sanitized_base}-${BUMP_TYPE}-v${new_version}"
+          sanitized_mode="${VERSION_BUMP}-${RELEASE_STAGE}"
+          release_branch="release-pr/${sanitized_base}-${sanitized_mode}-v${new_version}"
           pr_title="Release: ${new_version}"
 
           {
@@ -85,12 +183,15 @@ jobs:
             echo "new_version=${new_version}"
             echo "release_branch=${release_branch}"
             echo "pr_title=${pr_title}"
+            echo "release_mode=${release_mode}"
           } >> "${GITHUB_OUTPUT}"
 
           {
             echo "## Release Plan"
             echo "- Base branch: ${base_branch}"
-            echo "- Release type: ${BUMP_TYPE}"
+            echo "- Version bump: ${VERSION_BUMP}"
+            echo "- Release stage: ${RELEASE_STAGE}"
+            echo "- Release mode: ${release_mode}"
             echo "- Previous version: ${current_version}"
             echo "- New version: ${new_version}"
           } >> "${GITHUB_STEP_SUMMARY}"
@@ -106,7 +207,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          bump-my-version bump "${BUMP_TYPE}"
+          bump-my-version bump --new-version "${{ steps.release.outputs.new_version }}"
           towncrier build --yes --version "${{ steps.release.outputs.new_version }}"
 
       - name: Create release branch commit
@@ -136,6 +237,7 @@ jobs:
           new_version="${{ steps.release.outputs.new_version }}"
           release_branch="${{ steps.release.outputs.release_branch }}"
           pr_title="${{ steps.release.outputs.pr_title }}"
+          release_mode="${{ steps.release.outputs.release_mode }}"
 
           existing_pr_url="$({
             gh pr list \
@@ -156,7 +258,7 @@ jobs:
           ## Summary
 
           - Base branch: \`${base_branch}\`
-          - Release type: \`${BUMP_TYPE}\`
+          - Release mode: \`${release_mode}\`
           - Previous version: \`${current_version}\`
           - New version: \`${new_version}\`
           - Changelog updated with \`towncrier\`

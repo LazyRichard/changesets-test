@@ -1,13 +1,13 @@
 [tool.bumpversion]
-current_version = "0.2.0-alpha"
+current_version = "0.2.0-alpha.1"
 parse = '''(?x)
     (?P<major>0|[1-9]\d*)\.
     (?P<minor>0|[1-9]\d*)\.
     (?P<patch>0|[1-9]\d*)
-    (?:-(?P<stage>alpha|beta|rc))?
+    (?:-(?P<stage>alpha|beta|rc)\.(?P<stage_num>0|[1-9]\d*))?
 '''
 serialize = [
-    "{major}.{minor}.{patch}-{stage}",
+    "{major}.{minor}.{patch}-{stage}.{stage_num}",
     "{major}.{minor}.{patch}",
 ]
 commit = false
@@ -16,6 +16,10 @@ tag = false
 [tool.bumpversion.parts.stage]
 values = ["alpha", "beta", "rc", "final"]
 optional_value = "final"
+
+[tool.bumpversion.parts.stage_num]
+first_value = "1"
+optional_value = "1"
 
 [[tool.bumpversion.files]]
 filename = "VERSION"
