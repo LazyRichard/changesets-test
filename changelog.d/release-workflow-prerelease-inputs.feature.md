@@ -1,1 +1,0 @@
-Updated the release PR workflow to use separate `version_bump` and `release_stage` inputs, supporting numbered prereleases like `alpha.1` and allowing prerelease stage transitions on `main` while keeping `release/x.y` limited to final patch releases.
