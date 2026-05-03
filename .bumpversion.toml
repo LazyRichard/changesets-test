@@ -1,11 +1,11 @@
 [tool.bumpversion]
 current_version = "0.1.0"
-parse = """(?x)
+parse = '''(?x)
     (?P<major>0|[1-9]\d*)\.
     (?P<minor>0|[1-9]\d*)\.
     (?P<patch>0|[1-9]\d*)
     (?:-(?P<stage>alpha|beta|rc))?
-"""
+'''
 serialize = [
     "{major}.{minor}.{patch}-{stage}",
     "{major}.{minor}.{patch}",
