@@ -121,12 +121,12 @@ jobs:
           release_branch="${{ steps.release.outputs.release_branch }}"
           new_version="${{ steps.release.outputs.new_version }}"
 
-          git switch -c "${release_branch}"
+          git switch -C "${release_branch}"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add .
           git commit -m "Prepare release ${new_version}"
-          git push --set-upstream origin "${release_branch}"
+          git push --force-with-lease --set-upstream origin "${release_branch}"
 
       - name: Open release pull request
         if: ${{ !inputs.dry_run }}
@@ -140,6 +140,21 @@ jobs:
           release_branch="${{ steps.release.outputs.release_branch }}"
           pr_title="${{ steps.release.outputs.pr_title }}"
 
+          existing_pr_url="$({
+            gh pr list \
+              --base "${base_branch}" \
+              --head "${release_branch}" \
+              --state open \
+              --json url \
+              --jq '.[0].url'
+          } || true)"
+
+          if [[ -n "${existing_pr_url}" && "${existing_pr_url}" != "null" ]]; then
+            echo "Existing PR found: ${existing_pr_url}"
+            echo "PR_URL=${existing_pr_url}" >> "${GITHUB_ENV}"
+            exit 0
+          fi
+
           cat <<EOF > release-pr-body.md
           ## Summary
 
@@ -150,8 +165,19 @@ jobs:
           - Changelog updated with \`towncrier\`
           EOF
 
-          gh pr create \
+          pr_url="$(gh pr create \
             --base "${base_branch}" \
             --head "${release_branch}" \
             --title "${pr_title}" \
-            --body-file release-pr-body.md
+            --body-file release-pr-body.md)"
+
+          echo "PR_URL=${pr_url}" >> "${GITHUB_ENV}"
+
+      - name: Summarize pull request
+        if: ${{ !inputs.dry_run }}
+        shell: bash
+        run: |
+          if [[ -n "${PR_URL:-}" ]]; then
+            echo "## Pull Request" >> "${GITHUB_STEP_SUMMARY}"
+            echo "- URL: ${PR_URL}" >> "${GITHUB_STEP_SUMMARY}"
+          fi
