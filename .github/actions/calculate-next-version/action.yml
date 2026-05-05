@@ -1,0 +1,85 @@
+name: calculate next version
+description: Calculate the next release version from the current version and release inputs.
+
+inputs:
+  current-version:
+    description: Current version string.
+    required: true
+  version-bump:
+    description: Numeric version line to prepare.
+    required: true
+  release-stage:
+    description: Release stage for the target version.
+    required: true
+
+outputs:
+  next-version:
+    description: Calculated next version.
+    value: ${{ steps.calculate.outputs.next-version }}
+
+runs:
+  using: composite
+  steps:
+    - name: Calculate next version
+      id: calculate
+      shell: bash
+      env:
+        CURRENT_VERSION: ${{ inputs.current-version }}
+        VERSION_BUMP: ${{ inputs.version-bump }}
+        RELEASE_STAGE: ${{ inputs.release-stage }}
+      run: |
+        set -euo pipefail
+
+        python3 <<'PY'
+        import os
+        import re
+
+        current_version = os.environ["CURRENT_VERSION"]
+        version_bump = os.environ["VERSION_BUMP"]
+        release_stage = os.environ["RELEASE_STAGE"]
+
+        match = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)(?:-(alpha|beta|rc)\.(\d+))?", current_version)
+        if match is None:
+            raise SystemExit(
+                f"Current version '{current_version}' does not match the configured release format."
+            )
+
+        major = int(match.group(1))
+        minor = int(match.group(2))
+        patch = int(match.group(3))
+        current_stage = match.group(4) or "stable"
+        current_stage_num = int(match.group(5)) if match.group(5) else None
+
+        if version_bump == "major":
+            major += 1
+            minor = 0
+            patch = 0
+        elif version_bump == "minor":
+            minor += 1
+            patch = 0
+        elif version_bump == "patch":
+            patch += 1
+        elif version_bump != "none":
+            raise SystemExit(f"Unsupported version_bump '{version_bump}'.")
+
+        if version_bump == "none":
+            if current_stage == "stable":
+                raise SystemExit(
+                    "version_bump=none requires the current version to already be a prerelease."
+                )
+
+            if release_stage == "stable":
+                next_version = f"{major}.{minor}.{patch}"
+            elif release_stage == current_stage:
+                next_version = f"{major}.{minor}.{patch}-{release_stage}.{current_stage_num + 1}"
+            else:
+                next_version = f"{major}.{minor}.{patch}-{release_stage}.1"
+        else:
+            if release_stage == "stable":
+                next_version = f"{major}.{minor}.{patch}"
+            else:
+                next_version = f"{major}.{minor}.{patch}-{release_stage}.1"
+
+        with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+            output.write(f"next-version={next_version}\n")
+        PY
